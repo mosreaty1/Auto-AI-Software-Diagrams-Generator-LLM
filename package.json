@@ -1,0 +1,16 @@
+{
+  "name": "diagram-analysis-pipeline",
+  "version": "0.1.0",
+  "description": "Parallel LLM sequence-diagram generation, judging, reverse reconstruction, and accuracy scoring.",
+  "type": "module",
+  "bin": {
+    "diagram-pipeline": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node ./src/cli.js",
+    "check": "node --check ./src/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
