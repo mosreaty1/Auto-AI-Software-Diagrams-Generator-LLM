@@ -15,7 +15,7 @@ class LlmProvider {
     this.extractText = extractText;
   }
 
-  async invoke(promptText) {
+  async invoke(promptText, { timeoutMs = 120_000, retries = 1 } = {}) {
     if (!this.apiKey) {
       return {
         ok: false,
@@ -24,37 +24,59 @@ class LlmProvider {
       };
     }
 
-    try {
-      const response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...this.headers(this.apiKey),
-        },
-        body: JSON.stringify(this.buildBody(this.model, promptText)),
-      });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      // Step 1 — fresh AbortController for each attempt
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!response.ok) {
-        const errorText = await response.text();
+      try {
+        // Step 2 — pass signal so idle streams are cancelled instead of hanging
+        const response = await fetch(this.endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...this.headers(this.apiKey),
+          },
+          body: JSON.stringify(this.buildBody(this.model, promptText)),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          return {
+            ok: false,
+            provider: this.name,
+            error: `${this.name} failed with ${response.status}: ${errorText.slice(0, 300)}`,
+          };
+        }
+
+        const payload = await response.json();
+        return {
+          ok: true,
+          provider: this.name,
+          rawText: this.extractText(payload),
+        };
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        // Step 3 — treat idle-timeout / abort as a skippable provider failure
+        const isTimeout = error.name === "AbortError" ||
+          (error instanceof Error && error.message.toLowerCase().includes("timeout"));
+
+        if (isTimeout && attempt < retries) {
+          continue; // retry once before giving up
+        }
+
         return {
           ok: false,
           provider: this.name,
-          error: `${this.name} failed with ${response.status}: ${errorText.slice(0, 300)}`,
+          error: isTimeout
+            ? `${this.name} skipped: stream idle timeout after ${timeoutMs / 1000}s`
+            : (error instanceof Error ? error.message : String(error)),
         };
       }
-
-      const payload = await response.json();
-      return {
-        ok: true,
-        provider: this.name,
-        rawText: this.extractText(payload),
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        provider: this.name,
-        error: error instanceof Error ? error.message : String(error),
-      };
     }
   }
 
